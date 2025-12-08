@@ -10,7 +10,7 @@ from uuid import uuid4
 from urllib.parse import unquote_plus
 
 from gspread.utils import rowcol_to_a1
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -500,19 +500,29 @@ def sync_aging_orders_sheet_to_db(db: Session) -> dict[str, int]:
     updated_count = len(incoming_keys & existing_shipments)
 
     stmt = insert(AgingOrder).values(incoming_rows)
+    excluded = stmt.excluded
     update_columns: Dict[str, Any] = {}
-    for column in AgingOrder.__table__.columns:
-        if column.name in ("id", "created_at"):
-            continue
-        if column.name == "updated_at":
-            update_columns[column.name] = func.now()
-        elif column.name == "is_deleted":
-            # Any incoming row should be marked as not deleted
-            update_columns[column.name] = stmt.excluded[column.name]
-        else:
-            update_columns[column.name] = stmt.excluded[column.name]
+    # Only trigger UPDATE when any field is different to avoid touching updated_at unnecessarily.
+    diff_conditions = []
 
-    stmt = stmt.on_conflict_do_update(index_elements=[AgingOrder.shipment_no], set_=update_columns)
+    for column in AgingOrder.__table__.columns:
+        name = column.name
+        if name in ("id", "created_at"):
+            continue
+        if name == "updated_at":
+            update_columns[name] = func.now()
+            continue
+
+        source_value = getattr(excluded, name)
+        update_columns[name] = source_value
+        if name != "shipment_no":
+            diff_conditions.append(column.is_distinct_from(source_value))
+
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[AgingOrder.shipment_no],
+        set_=update_columns,
+        where=or_(*diff_conditions),
+    )
     db.execute(stmt)
 
     to_soft_delete = [value for (value, is_deleted) in existing_rows if value not in incoming_keys and not is_deleted]
