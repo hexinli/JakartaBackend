@@ -1,12 +1,7 @@
 # app/settings.py
-from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
 import os
-
-# 用于从 .env 文件加载环境变量到 os.environ 中
-env_file = find_dotenv(".env.dev")
-load_dotenv(env_file)
 
 
 class Settings(BaseSettings):
